@@ -1,0 +1,17 @@
+{
+  "name": "PantryPlan",
+  "short_name": "PantryPlan",
+  "description": "Family meal planning and aisle-sorted shopping",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#e7ece8",
+  "theme_color": "#1f6f5b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

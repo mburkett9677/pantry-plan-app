@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MemberRole {
+  ADMIN
+  PARENT
+  KID
+}
+
+enum MealSlot {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+}
+
+model Household {
+  id               String   @id @default(cuid())
+  name             String
+  inviteCode       String   @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  skylightEmail    String?
+  skylightPassword String?
+  skylightFrameId  String?
+  skylightEnabled  Boolean  @default(false)
+  members          Member[]
+  recipes          Recipe[]
+  plannedMeals     PlannedMeal[]
+  stores           Store[]
+  shoppingTrips    ShoppingTrip[]
+  lunchRequests    LunchRequest[]
+  sessions         Session[]
+}
+
+model Member {
+  id             String         @id @default(cuid())
+  householdId    String
+  household      Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  name           String
+  role           MemberRole     @default(PARENT)
+  color          String         @default("#2a6f5e")
+  pinHash        String?
+  createdAt      DateTime       @default(now())
+  plannedMeals   PlannedMeal[]
+  lunchRequests  LunchRequest[]
+  sessions       Session[]
+
+  @@unique([householdId, name])
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  householdId String
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  memberId    String
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+}
+
+model Recipe {
+  id           String             @id @default(cuid())
+  householdId  String
+  household    Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  title        String
+  sourceText   String?
+  instructions String?
+  servings     Int?
+  skylightId   String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  ingredients  RecipeIngredient[]
+  plannedMeals PlannedMeal[]
+}
+
+model RecipeIngredient {
+  id       String  @id @default(cuid())
+  recipeId String
+  recipe   Recipe  @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  name     String
+  quantity String?
+  unit     String?
+  notes    String?
+  category String?
+  sortOrder Int    @default(0)
+}
+
+model PlannedMeal {
+  id               String    @id @default(cuid())
+  householdId      String
+  household        Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  date             DateTime  @db.Date
+  slot             MealSlot
+  title            String
+  recipeId         String?
+  recipe           Recipe?   @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  requestedById    String?
+  requestedBy      Member?   @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+  notes            String?
+  skylightSittingId String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([householdId, date])
+}
+
+model LunchRequest {
+  id          String    @id @default(cuid())
+  householdId String
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  memberId    String
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  date        DateTime  @db.Date
+  requestText String
+  createdAt   DateTime  @default(now())
+
+  @@index([householdId, date])
+}
+
+model Store {
+  id          String           @id @default(cuid())
+  householdId String
+  household   Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  name        String
+  createdAt   DateTime         @default(now())
+  aisles      Aisle[]
+  trips       ShoppingTrip[]
+}
+
+model Aisle {
+  id         String   @id @default(cuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  number     Int
+  name       String
+  categories String[]
+  sortOrder  Int      @default(0)
+
+  @@unique([storeId, number])
+}
+
+model ShoppingTrip {
+  id          String         @id @default(cuid())
+  householdId String
+  household   Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  storeId     String?
+  store       Store?         @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  weekStart   DateTime       @db.Date
+  createdAt   DateTime       @default(now())
+  items       ShoppingItem[]
+}
+
+model ShoppingItem {
+  id       String       @id @default(cuid())
+  tripId   String
+  trip     ShoppingTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  name     String
+  quantity String?
+  unit     String?
+  category String?
+  aisleNumber Int?
+  aisleName   String?
+  checked  Boolean      @default(false)
+  sources  String[]
+  sortOrder Int         @default(0)
+}
