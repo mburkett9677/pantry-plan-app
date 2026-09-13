@@ -117,15 +117,16 @@ export async function addMemberAction(formData: FormData) {
 
 export async function saveRecipeAction(formData: FormData) {
   const session = await requireAdult();
-  const sourceText = String(formData.get("sourceText") || "");
+  const sourceText = String(formData.get("sourceText") || formData.get("sourceText") || "").trim();
   const parsed = await parseRecipeText(sourceText);
   const title = String(formData.get("title") || parsed.title).trim() || parsed.title;
+  const instructionsOverride = String(formData.get("instructions") || "").trim();
   const recipe = await prisma.recipe.create({
     data: {
       householdId: session.householdId,
       title,
       sourceText,
-      instructions: parsed.instructions,
+      instructions: instructionsOverride || parsed.instructions || null,
       servings: parsed.servings ?? undefined,
       ingredients: {
         create: parsed.ingredients.map((ing, index) => ({
@@ -141,6 +142,20 @@ export async function saveRecipeAction(formData: FormData) {
   });
   revalidatePath("/recipes");
   redirect(`/recipes/${recipe.id}`);
+}
+
+
+export async function updateRecipeInstructionsAction(formData: FormData) {
+  const session = await requireAdult();
+  const id = String(formData.get("id") || "");
+  const instructions = String(formData.get("instructions") || "").trim();
+  await prisma.recipe.updateMany({
+    where: { id, householdId: session.householdId },
+    data: { instructions: instructions || null },
+  });
+  revalidatePath(`/recipes/${id}`);
+  revalidatePath("/recipes");
+  redirect(`/recipes/${id}?saved=1`);
 }
 
 export async function deleteRecipeAction(formData: FormData) {
@@ -379,7 +394,7 @@ export async function testSkylightAction() {
   const session = await requireAdult();
   const h = session.household;
   if (!h.skylightEmail || !h.skylightPassword || !h.skylightFrameId) {
-    return;
+    redirect("/settings?skylight=missing");
   }
   try {
     await testSkylightConnection({
@@ -387,16 +402,27 @@ export async function testSkylightAction() {
       password: h.skylightPassword,
       frameId: h.skylightFrameId,
     });
-  } catch {
-    // Connection errors surface in logs; UI keeps settings form simple for MVP.
+    redirect("/settings?skylight=ok");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Connection failed";
+    redirect(`/settings?skylight=error&msg=${encodeURIComponent(msg.slice(0, 180))}`);
   }
 }
+
 
 export async function syncWeekToSkylightAction(formData: FormData) {
   const session = await requireAdult();
   const h = session.household;
+  const weekStartRawForRedirect = String(formData.get("weekStart") || "");
+  const redirectBase = weekStartRawForRedirect
+    ? `/plan?week=${weekStartRawForRedirect}`
+    : "/plan";
   if (!h.skylightEnabled || !h.skylightEmail || !h.skylightPassword || !h.skylightFrameId) {
-    return;
+    redirect(
+      redirectBase.includes("?")
+        ? `${redirectBase}&skylight=disabled`
+        : `${redirectBase}?skylight=disabled`,
+    );
   }
   const weekStartRaw = String(formData.get("weekStart") || "");
   const weekStart = weekStartRaw ? parseDateKey(weekStartRaw) : weekStartFrom();
@@ -430,13 +456,31 @@ export async function syncWeekToSkylightAction(formData: FormData) {
   }));
 
   try {
-    await syncMealsToSkylight({
+    const result = await syncMealsToSkylight({
       email: h.skylightEmail,
       password: h.skylightPassword,
       frameId: h.skylightFrameId,
       meals: payload,
     });
-  } catch {
-    // Sync failures are non-blocking in MVP form posts.
+    const q = new URLSearchParams();
+    if (weekStartRawForRedirect) q.set("week", weekStartRawForRedirect);
+    if (result.ok) {
+      q.set("skylight", "ok");
+      q.set("synced", String(result.synced));
+    } else {
+      q.set("skylight", "partial");
+      q.set("synced", String(result.synced));
+      q.set("msg", (result.warnings[0] || "Sync completed with warnings").slice(0, 180));
+    }
+    redirect(`/plan?${q.toString()}`);
+  } catch (err) {
+    const q = new URLSearchParams();
+    if (weekStartRawForRedirect) q.set("week", weekStartRawForRedirect);
+    q.set("skylight", "error");
+    q.set(
+      "msg",
+      (err instanceof Error ? err.message : "Sync failed").slice(0, 180),
+    );
+    redirect(`/plan?${q.toString()}`);
   }
 }
