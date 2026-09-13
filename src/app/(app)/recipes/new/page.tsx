@@ -12,8 +12,8 @@ export default async function NewRecipePage() {
           Paste a recipe
         </h1>
         <p className="lede">
-          Drop in a full recipe, a website dump, or just a grocery list. AI parses when
-          `OPENAI_API_KEY` is set; otherwise a local heuristic is used.
+          Drop in a full recipe, a website dump, or just a grocery list. Use the instructions
+          box for cooking steps (or leave it blank if they’re already in the paste).
         </p>
       </div>
 
@@ -29,6 +29,15 @@ export default async function NewRecipePage() {
             name="sourceText"
             required
             placeholder={`Tacos\n1 lb ground beef\n8 tortillas\n1 cup shredded cheese\n...`}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="instructions">Instructions / directions</label>
+          <textarea
+            id="instructions"
+            name="instructions"
+            placeholder={"1. Brown the beef\n2. Warm tortillas\n3. Assemble and serve"}
+            style={{ minHeight: 140 }}
           />
         </div>
         <button className="btn btn-primary" type="submit">

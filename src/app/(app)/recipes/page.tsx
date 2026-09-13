@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireAdult } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { deleteRecipeAction } from "@/app/actions";
+import { DeleteRecipeButton } from "@/components/DeleteRecipeButton";
 
 export default async function RecipesPage() {
   const session = await requireAdult();
@@ -33,7 +33,11 @@ export default async function RecipesPage() {
         </div>
       ) : (
         recipes.map((recipe) => (
-          <article key={recipe.id} className="panel row" style={{ justifyContent: "space-between" }}>
+          <article
+            key={recipe.id}
+            className="panel row"
+            style={{ justifyContent: "space-between" }}
+          >
             <div>
               <Link href={`/recipes/${recipe.id}`}>
                 <strong style={{ fontFamily: "var(--font-display)", fontSize: "1.2rem" }}>
@@ -42,14 +46,10 @@ export default async function RecipesPage() {
               </Link>
               <div className="lede" style={{ margin: 0, fontSize: "0.9rem" }}>
                 {recipe._count.ingredients} ingredients
+                {recipe.instructions ? " · has instructions" : ""}
               </div>
             </div>
-            <form action={deleteRecipeAction}>
-              <input type="hidden" name="id" value={recipe.id} />
-              <button className="btn btn-danger" type="submit">
-                Delete
-              </button>
-            </form>
+            <DeleteRecipeButton recipeId={recipe.id} recipeTitle={recipe.title} />
           </article>
         ))
       )}
