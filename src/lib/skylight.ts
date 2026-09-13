@@ -265,22 +265,6 @@ function jsonApiId(payload: unknown): string | undefined {
   return undefined;
 }
 
-function slotWindow(date: string, slot: SkylightMealPayload["slot"]) {
-  const hours =
-    slot === "breakfast"
-      ? [7, 8]
-      : slot === "lunch"
-        ? [12, 13]
-        : slot === "dinner"
-          ? [18, 19]
-          : [15, 16];
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return {
-    startsAt: `${date}T${pad(hours[0])}:00:00`,
-    endsAt: `${date}T${pad(hours[1])}:00:00`,
-  };
-}
-
 async function resolveMealCategoryId(
   token: string,
   frameId: string,
@@ -324,6 +308,12 @@ export type SkylightMealPayload = {
   };
 };
 
+function compactBody<T extends Record<string, unknown>>(body: T) {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, v]) => v !== undefined && v !== null && v !== ""),
+  );
+}
+
 export async function syncMealsToSkylight(opts: {
   email: string;
   password: string;
@@ -343,93 +333,72 @@ export async function syncMealsToSkylight(opts: {
           await resolveMealCategoryId(tokens.accessToken, opts.frameId, meal.slot),
         );
       }
-      const mealCategoryId = categoryCache.get(meal.slot) || undefined;
-      const { startsAt, endsAt } = slotWindow(meal.date, meal.slot);
-
-      let recipeId: string | undefined;
-      if (meal.recipe) {
-        const ingredientLines = (meal.recipe.ingredients || [])
-          .map((i) => [i.quantity, i.unit, i.name].filter(Boolean).join(" ").trim())
-          .filter(Boolean);
-
-        const recipeBodies = [
-          {
-            name: meal.recipe.title,
-            description: ingredientLines.join("\n") || undefined,
-            ingredients: ingredientLines.join("\n") || undefined,
-            instructions: meal.recipe.instructions || undefined,
-            mealCategoryId,
-            meal_category_id: mealCategoryId,
-          },
-          {
-            summary: meal.recipe.title,
-            description: [
-              ingredientLines.length ? `Ingredients:\n${ingredientLines.join("\n")}` : "",
-              meal.recipe.instructions ? `Directions:\n${meal.recipe.instructions}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-            meal_category_id: mealCategoryId,
-          },
-        ];
-
-        for (const body of recipeBodies) {
-          const createRecipe = await api(
-            tokens.accessToken,
-            `/api/frames/${opts.frameId}/meals/recipes?include=meal_category`,
-            { method: "POST", body: JSON.stringify(body) },
-          );
-          if (createRecipe.ok) {
-            recipeId = jsonApiId(await createRecipe.json());
-            break;
-          }
-          if (body === recipeBodies[recipeBodies.length - 1]) {
-            warnings.push(`Recipe create failed for ${meal.title}: ${createRecipe.status}`);
-          }
-        }
+      const mealCategoryId = categoryCache.get(meal.slot);
+      if (!mealCategoryId) {
+        warnings.push(`No Skylight meal category for ${meal.slot}`);
+        continue;
       }
 
-      const sittingBodies = [
-        {
-          startsAt,
-          endsAt,
-          name: meal.title,
-          notes: meal.title,
-          recipeId,
-          mealCategoryId,
-        },
-        {
-          date: meal.date,
-          name: meal.title,
-          summary: meal.title,
-          meal_category_id: mealCategoryId,
-          meal_recipe_id: recipeId,
-          recipe_id: recipeId,
-          starts_at: startsAt,
-          ends_at: endsAt,
-        },
-      ];
+      // Sittings reject `summary` ("must be blank"). The meal title lives on a
+      // recipe (`summary`), then the sitting references that recipe.
+      const recipeTitle = meal.recipe?.title || meal.title;
+      const ingredientLines = (meal.recipe?.ingredients || [])
+        .map((i) => [i.quantity, i.unit, i.name].filter(Boolean).join(" ").trim())
+        .filter(Boolean);
+      const description = [
+        ingredientLines.length ? `Ingredients:\n${ingredientLines.join("\n")}` : "",
+        meal.recipe?.instructions ? `Directions:\n${meal.recipe.instructions}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
 
-      let sittingOk = false;
-      let lastStatus = 0;
-      let lastText = "";
-      for (const body of sittingBodies) {
-        const sittingRes = await api(
-          tokens.accessToken,
-          `/api/frames/${opts.frameId}/meals/sittings?include=meal_category,meal_recipe`,
-          { method: "POST", body: JSON.stringify(body) },
-        );
-        lastStatus = sittingRes.status;
-        if (sittingRes.ok) {
-          sittingOk = true;
-          break;
-        }
-        lastText = await sittingRes.text();
-      }
-
-      if (!sittingOk) {
+      const createRecipe = await api(
+        tokens.accessToken,
+        `/api/frames/${opts.frameId}/meals/recipes?include=meal_category`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            compactBody({
+              meal_category_id: mealCategoryId,
+              summary: recipeTitle,
+              description: description || undefined,
+            }),
+          ),
+        },
+      );
+      if (!createRecipe.ok) {
+        const text = await createRecipe.text();
         warnings.push(
-          `Meal sync failed for ${meal.date} ${meal.title}: ${lastStatus} ${lastText.slice(0, 120)}`,
+          `Recipe create failed for ${meal.title}: ${createRecipe.status} ${text.slice(0, 120)}`,
+        );
+        continue;
+      }
+      const recipeId = jsonApiId(await createRecipe.json());
+      if (!recipeId) {
+        warnings.push(`Recipe create returned no id for ${meal.title}`);
+        continue;
+      }
+
+      const sittingRes = await api(
+        tokens.accessToken,
+        `/api/frames/${opts.frameId}/meals/sittings?include=meal_category,meal_recipe`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            compactBody({
+              meal_category_id: mealCategoryId,
+              date: meal.date,
+              meal_recipe_id: recipeId,
+              note: meal.title !== recipeTitle ? meal.title : undefined,
+            }),
+          ),
+        },
+      );
+
+      if (!sittingRes.ok) {
+        const text = await sittingRes.text();
+        warnings.push(
+          `Meal sync failed for ${meal.date} ${meal.title}: ${sittingRes.status} ${text.slice(0, 120)}`,
         );
         continue;
       }
