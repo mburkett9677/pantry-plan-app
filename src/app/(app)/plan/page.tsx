@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { StatusBanner } from "@/components/StatusBanner";
 import { format } from "date-fns";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -12,10 +13,11 @@ import {
 export default async function PlanPage({
   searchParams,
 }: {
-  searchParams: Promise<{ week?: string }>;
+  searchParams: Promise<{ week?: string; skylight?: string; synced?: string; msg?: string }>;
 }) {
   const session = await requireSession();
   const params = await searchParams;
+  const sp = params;
   const weekStart = params.week ? new Date(params.week) : weekStartFrom();
   const days = weekDays(weekStart);
   const weekEnd = days[6];
@@ -66,6 +68,23 @@ export default async function PlanPage({
           </Link>
         </div>
       </div>
+
+      {(sp.skylight === "ok" || sp.skylight === "partial") && (
+        <StatusBanner tone={sp.skylight === "ok" ? "ok" : "info"}>
+          Skylight sync finished{sp.synced ? ` — ${sp.synced} meal(s)` : ""}.
+          {sp.msg ? ` ${decodeURIComponent(sp.msg)}` : ""}
+        </StatusBanner>
+      )}
+      {sp.skylight === "error" && (
+        <StatusBanner tone="error">
+          Skylight sync failed{sp.msg ? `: ${decodeURIComponent(sp.msg)}` : "."}
+        </StatusBanner>
+      )}
+      {sp.skylight === "disabled" && (
+        <StatusBanner tone="error">
+          Enable Skylight and save credentials in Settings first.
+        </StatusBanner>
+      )}
 
       {session.household.skylightEnabled && session.member.role !== "KID" && (
         <form action={syncWeekToSkylightAction} className="panel row" style={{ justifyContent: "space-between" }}>
