@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { StatusBanner } from "@/components/StatusBanner";
+import { SkylightTestForm } from "@/components/SkylightTestForm";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
@@ -9,8 +11,13 @@ import {
   testSkylightAction,
 } from "@/app/actions";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ skylight?: string; msg?: string }>;
+}) {
   const session = await requireSession();
+  const sp = await searchParams;
   const members = await prisma.member.findMany({
     where: { householdId: session.householdId },
     orderBy: { name: "asc" },
@@ -25,6 +32,20 @@ export default async function SettingsPage() {
           Settings
         </h1>
       </div>
+
+      {sp.skylight === "ok" && (
+        <StatusBanner tone="ok">Skylight connection succeeded.</StatusBanner>
+      )}
+      {sp.skylight === "missing" && (
+        <StatusBanner tone="error">
+          Save Skylight email, password, and frame ID before testing.
+        </StatusBanner>
+      )}
+      {sp.skylight === "error" && (
+        <StatusBanner tone="error">
+          Skylight test failed{sp.msg ? `: ${decodeURIComponent(sp.msg)}` : "."}
+        </StatusBanner>
+      )}
 
       <section className="panel stack">
         <strong>Invite code</strong>
@@ -150,11 +171,7 @@ export default async function SettingsPage() {
               Save Skylight settings
             </button>
           </form>
-          <form action={testSkylightAction}>
-            <button className="btn btn-secondary" type="submit">
-              Test connection
-            </button>
-          </form>
+          <SkylightTestForm action={testSkylightAction} />
         </section>
       )}
 
