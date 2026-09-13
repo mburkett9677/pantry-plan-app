@@ -156,8 +156,13 @@ export default async function SettingsPage({
                 id="skylightFrameId"
                 name="skylightFrameId"
                 defaultValue={session.household.skylightFrameId || ""}
-                placeholder="From Skylight app / community CLI `skylight frames`"
+                placeholder="Number from ourskylight.com/calendar/…"
               />
+              <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>
+                Open ourskylight.com, open your calendar, and copy the number in the URL
+                (e.g. …/calendar/4197102). A wrong ID after login lists your frames in the
+                error.
+              </p>
             </div>
             <label className="row">
               <input
