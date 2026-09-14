@@ -1,1 +1,1 @@
-@/agent/pantry-plan/src/lib/skylight.ts
+file:///agent/pantry-plan/src/lib/skylight.ts
