@@ -170,10 +170,22 @@ export async function upsertPlannedMealAction(formData: FormData) {
   const session = await requireSession();
   const date = String(formData.get("date") || "");
   const slot = String(formData.get("slot") || "DINNER") as MealSlot;
-  const title = String(formData.get("title") || "").trim();
+  let title = String(formData.get("title") || "").trim();
   const recipeId = String(formData.get("recipeId") || "") || null;
   const id = String(formData.get("id") || "") || null;
-  if (!date || !title) return;
+  if (!date) return;
+
+  let resolvedRecipeId = recipeId;
+  if (recipeId) {
+    const recipe = await prisma.recipe.findFirst({
+      where: { id: recipeId, householdId: session.householdId },
+    });
+    if (!recipe) return;
+    // Recipe title is enough — no separate meal name required.
+    title = title || recipe.title;
+    resolvedRecipeId = recipe.id;
+  }
+  if (!title) return;
 
   if (id) {
     await prisma.plannedMeal.updateMany({
@@ -182,7 +194,7 @@ export async function upsertPlannedMealAction(formData: FormData) {
         title,
         slot,
         date: parseDateKey(date),
-        recipeId,
+        recipeId: resolvedRecipeId,
         requestedById: session.memberId,
       },
     });
@@ -193,7 +205,7 @@ export async function upsertPlannedMealAction(formData: FormData) {
         date: parseDateKey(date),
         slot,
         title,
-        recipeId,
+        recipeId: resolvedRecipeId,
         requestedById: session.memberId,
       },
     });
