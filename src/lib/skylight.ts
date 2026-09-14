@@ -250,20 +250,6 @@ async function api(token: string, path: string, init?: RequestInit): Promise<Res
   });
 }
 
-function jsonApiId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const obj = payload as { id?: string; data?: unknown };
-  if (typeof obj.id === "string") return obj.id;
-  const data = obj.data;
-  if (Array.isArray(data)) {
-    const first = data[0] as { id?: string } | undefined;
-    return first?.id;
-  }
-  if (data && typeof data === "object") {
-    return (data as { id?: string }).id;
-  }
-  return undefined;
-}
 
 async function resolveMealCategoryId(
   token: string,
