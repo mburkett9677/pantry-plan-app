@@ -326,11 +326,11 @@ export async function syncMealsToSkylight(opts: {
         continue;
       }
 
-      // Skip Skylight recipes — each sync was creating duplicates. Sittings only
-      // need category + date; put the meal title (and directions) in `note`.
+      // Freeform sitting: Skylight requires either meal_recipe or summary.
+      // Use summary for the meal name and skip recipe creates (avoids dupes).
+      // Put directions in `note` only — `description` on sittings is rejected.
       const title = meal.recipe?.title || meal.title;
       const instructions = (meal.recipe?.instructions || meal.notes || "").trim();
-      const note = [title, instructions].filter(Boolean).join("\n\n");
 
       const sittingRes = await api(
         tokens.accessToken,
@@ -341,7 +341,8 @@ export async function syncMealsToSkylight(opts: {
             compactBody({
               meal_category_id: mealCategoryId,
               date: meal.date,
-              note: note || undefined,
+              summary: title,
+              note: instructions || undefined,
             }),
           ),
         },
