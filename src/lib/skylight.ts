@@ -340,63 +340,22 @@ export async function syncMealsToSkylight(opts: {
         continue;
       }
 
-      // Sittings reject `summary` and `description` ("must be blank").
-      // Title + directions live on a Skylight recipe; the sitting only links it.
-      const recipeTitle = meal.recipe?.title || meal.title;
+      // Skip Skylight recipes — each sync was creating duplicates. Sittings only
+      // need category + date; put the meal title (and directions) in `note`.
+      const title = meal.recipe?.title || meal.title;
       const instructions = (meal.recipe?.instructions || meal.notes || "").trim();
-      const ingredientLines = (meal.recipe?.ingredients || [])
-        .map((i) => [i.quantity, i.unit, i.name].filter(Boolean).join(" ").trim())
-        .filter(Boolean);
-      const description = [
-        instructions ? `Instructions:\n${instructions}` : "",
-        ingredientLines.length ? `Ingredients:\n${ingredientLines.join("\n")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
-      if (!instructions && !ingredientLines.length) {
-        warnings.push(
-          `${meal.title} has no instructions/ingredients in PantryPlan (pick a recipe on Plan, then sync again)`,
-        );
-      }
-
-      const createRecipe = await api(
-        tokens.accessToken,
-        `/api/frames/${opts.frameId}/meals/recipes?include=meal_category`,
-        {
-          method: "POST",
-          body: JSON.stringify(
-            compactBody({
-              meal_category_id: mealCategoryId,
-              summary: recipeTitle,
-              description: description || undefined,
-            }),
-          ),
-        },
-      );
-      if (!createRecipe.ok) {
-        const text = await createRecipe.text();
-        warnings.push(
-          `Recipe create failed for ${meal.title}: ${createRecipe.status} ${text.slice(0, 120)}`,
-        );
-        continue;
-      }
-      const recipeId = jsonApiId(await createRecipe.json());
-      if (!recipeId) {
-        warnings.push(`Recipe create returned no id for ${meal.title}`);
-        continue;
-      }
+      const note = [title, instructions].filter(Boolean).join("\n\n");
 
       const sittingRes = await api(
         tokens.accessToken,
-        `/api/frames/${opts.frameId}/meals/sittings?include=meal_category,meal_recipe`,
+        `/api/frames/${opts.frameId}/meals/sittings?include=meal_category`,
         {
           method: "POST",
           body: JSON.stringify(
             compactBody({
               meal_category_id: mealCategoryId,
               date: meal.date,
-              meal_recipe_id: recipeId,
+              note: note || undefined,
             }),
           ),
         },
