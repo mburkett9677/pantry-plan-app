@@ -12,10 +12,10 @@ export default async function AppLayout({
 
   return (
     <div className="app-shell">
-      <header className="row" style={{ justifyContent: "space-between", marginBottom: "1rem" }}>
+      <header className="row" style={{ justifyContent: "space-between", marginBottom: "0.55rem" }}>
         <div>
           <p className="eyebrow">{session.household.name}</p>
-          <Link href={kidMode ? "/lunch" : "/plan"} className="brand" style={{ fontSize: "1.7rem" }}>
+          <Link href={kidMode ? "/lunch" : "/plan"} className="brand" style={{ fontSize: "1.35rem" }}>
             Pantry<span>Plan</span>
           </Link>
         </div>
