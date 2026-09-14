@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { StatusBanner } from "@/components/StatusBanner";
-import { AddMealForm } from "@/components/AddMealForm";
+import { MealSlotSection } from "@/components/MealSlotSection";
 import { format } from "date-fns";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -22,6 +22,7 @@ export default async function PlanPage({
   const weekStart = params.week ? new Date(params.week) : weekStartFrom();
   const days = weekDays(weekStart);
   const weekEnd = days[6];
+  const canEdit = session.member.role !== "KID";
 
   const [meals, recipes, lunchRequests] = await Promise.all([
     prisma.plannedMeal.findMany({
@@ -51,20 +52,22 @@ export default async function PlanPage({
   const next = new Date(weekStart);
   next.setDate(next.getDate() + 7);
 
+  const recipeOptions = recipes.map((r) => ({ id: r.id, title: r.title }));
+
   return (
-    <div className="stack">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+    <div className="stack plan-page">
+      <div className="plan-header">
         <div>
           <p className="eyebrow">This week</p>
-          <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.8rem" }}>
+          <h1 className="plan-title">
             {format(weekStart, "MMM d")} – {format(weekEnd, "MMM d")}
           </h1>
         </div>
-        <div className="row">
-          <Link className="btn btn-secondary" href={`/plan?week=${toDateKey(prev)}`}>
+        <div className="row plan-week-nav">
+          <Link className="btn btn-secondary btn-compact" href={`/plan?week=${toDateKey(prev)}`}>
             ←
           </Link>
-          <Link className="btn btn-secondary" href={`/plan?week=${toDateKey(next)}`}>
+          <Link className="btn btn-secondary btn-compact" href={`/plan?week=${toDateKey(next)}`}>
             →
           </Link>
         </div>
@@ -87,33 +90,27 @@ export default async function PlanPage({
         </StatusBanner>
       )}
 
-      {session.household.skylightEnabled && session.member.role !== "KID" && (
-        <form action={syncWeekToSkylightAction} className="panel row" style={{ justifyContent: "space-between" }}>
+      {session.household.skylightEnabled && canEdit && (
+        <form action={syncWeekToSkylightAction} className="panel plan-sync">
           <div>
             <strong>Skylight sync</strong>
-            <p className="lede" style={{ margin: 0, fontSize: "0.9rem" }}>
-              Push this week’s meals to your Skylight Calendar.
-            </p>
+            <p className="lede plan-sync-copy">Push this week’s meals to your Skylight Calendar.</p>
           </div>
           <input type="hidden" name="weekStart" value={toDateKey(weekStart)} />
-          <button className="btn btn-primary" type="submit">
+          <button className="btn btn-primary btn-compact" type="submit">
             Sync
           </button>
         </form>
       )}
 
       {lunchRequests.length > 0 && (
-        <section className="panel stack">
-          <h2 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.25rem" }}>
-            Lunch requests
-          </h2>
+        <section className="panel stack plan-compact-panel">
+          <h2 className="plan-section-title">Lunch requests</h2>
           {lunchRequests.map((req) => (
-            <div key={req.id} className="row" style={{ justifyContent: "space-between" }}>
-              <div>
-                <strong>{req.member.name}</strong>
-                <div className="lede" style={{ margin: 0, fontSize: "0.92rem" }}>
-                  {format(req.date, "EEE")}: {req.requestText}
-                </div>
+            <div key={req.id}>
+              <strong>{req.member.name}</strong>
+              <div className="lede meal-meta">
+                {format(req.date, "EEE")}: {req.requestText}
               </div>
             </div>
           ))}
@@ -125,49 +122,27 @@ export default async function PlanPage({
         const dayMeals = meals.filter((m) => toDateKey(m.date) === key);
         return (
           <section key={key} className="panel day-card">
-            <h2 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.35rem" }}>
-              {format(day, "EEEE, MMM d")}
-            </h2>
+            <h2 className="day-title">{format(day, "EEE, MMM d")}</h2>
             {SLOTS.map((slot) => {
               const slotMeals = dayMeals.filter((m) => m.slot === slot);
               return (
-                <div key={slot} className="slot">
-                  <strong>{slotLabel(slot)}</strong>
-                  {slotMeals.map((meal) => (
-                    <div key={meal.id} className="row" style={{ justifyContent: "space-between" }}>
-                      <div>
-                        <div>{meal.recipe?.title || meal.title}</div>
-                        {meal.recipe ? (
-                          <div className="lede" style={{ margin: 0, fontSize: "0.8rem" }}>
-                            Recipe linked
-                          </div>
-                        ) : null}
-                        {meal.requestedBy && (
-                          <div className="lede" style={{ margin: 0, fontSize: "0.8rem" }}>
-                            via {meal.requestedBy.name}
-                          </div>
-                        )}
-                      </div>
-                      {session.member.role !== "KID" && (
-                        <form action={deletePlannedMealAction}>
-                          <input type="hidden" name="id" value={meal.id} />
-                          <button className="btn btn-ghost" type="submit">
-                            Remove
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  ))}
-                  {session.member.role !== "KID" && (
-                    <AddMealForm
-                      action={upsertPlannedMealAction}
-                      date={key}
-                      slot={slot}
-                      slotLabel={slotLabel(slot)}
-                      recipes={recipes.map((r) => ({ id: r.id, title: r.title }))}
-                    />
-                  )}
-                </div>
+                <MealSlotSection
+                  key={slot}
+                  date={key}
+                  slot={slot}
+                  slotLabel={slotLabel(slot)}
+                  canEdit={canEdit}
+                  recipes={recipeOptions}
+                  upsertAction={upsertPlannedMealAction}
+                  deleteAction={deletePlannedMealAction}
+                  meals={slotMeals.map((meal) => ({
+                    id: meal.id,
+                    title: meal.title,
+                    recipeTitle: meal.recipe?.title,
+                    hasRecipe: Boolean(meal.recipe),
+                    requestedByName: meal.requestedBy?.name,
+                  }))}
+                />
               );
             })}
           </section>
