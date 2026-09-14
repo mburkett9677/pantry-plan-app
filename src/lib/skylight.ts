@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_REPLACE
+FILE_CONTENT_FROM_/tmp/recover_skylight_only.json
