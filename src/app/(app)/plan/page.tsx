@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { StatusBanner } from "@/components/StatusBanner";
+import { AddMealForm } from "@/components/AddMealForm";
 import { format } from "date-fns";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -135,7 +136,12 @@ export default async function PlanPage({
                   {slotMeals.map((meal) => (
                     <div key={meal.id} className="row" style={{ justifyContent: "space-between" }}>
                       <div>
-                        <div>{meal.title}</div>
+                        <div>{meal.recipe?.title || meal.title}</div>
+                        {meal.recipe ? (
+                          <div className="lede" style={{ margin: 0, fontSize: "0.8rem" }}>
+                            Recipe linked
+                          </div>
+                        ) : null}
                         {meal.requestedBy && (
                           <div className="lede" style={{ margin: 0, fontSize: "0.8rem" }}>
                             via {meal.requestedBy.name}
@@ -153,24 +159,13 @@ export default async function PlanPage({
                     </div>
                   ))}
                   {session.member.role !== "KID" && (
-                    <form action={upsertPlannedMealAction} className="stack" style={{ marginTop: "0.35rem" }}>
-                      <input type="hidden" name="date" value={key} />
-                      <input type="hidden" name="slot" value={slot} />
-                      <div className="row">
-                        <input name="title" placeholder={`Add ${slotLabel(slot).toLowerCase()}`} required style={{ flex: 1, borderRadius: 12, border: "1px solid var(--line)", padding: "0.7rem" }} />
-                        <select name="recipeId" defaultValue="" style={{ borderRadius: 12, border: "1px solid var(--line)", padding: "0.7rem" }}>
-                          <option value="">No recipe</option>
-                          {recipes.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.title}
-                            </option>
-                          ))}
-                        </select>
-                        <button className="btn btn-secondary" type="submit">
-                          Add
-                        </button>
-                      </div>
-                    </form>
+                    <AddMealForm
+                      action={upsertPlannedMealAction}
+                      date={key}
+                      slot={slot}
+                      slotLabel={slotLabel(slot)}
+                      recipes={recipes.map((r) => ({ id: r.id, title: r.title }))}
+                    />
                   )}
                 </div>
               );
