@@ -337,4 +337,187 @@ export async function generateShoppingListAction(formData: FormData) {
     ? await prisma.aisle.findMany({ where: { storeId }, orderBy: { number: "asc" } })
     : [];
 
-  const trip = await prisma.shoppingTrip
+  const trip = await prisma.shoppingTrip.create({
+    data: {
+      householdId: session.householdId,
+      storeId,
+      weekStart,
+      items: {
+        create: sortShoppingByAisle(
+          aggregated.map((item) => {
+            const aisle = matchAisle(item.category, aisles);
+            return {
+              name: item.name,
+              quantity: item.quantity,
+              unit: item.unit,
+              category: item.category,
+              aisleNumber: aisle?.number ?? null,
+              aisleName: aisle?.name ?? null,
+              sources: item.sources,
+              sortOrder: aisle?.number ?? 9999,
+            };
+          }),
+        ),
+      },
+    },
+  });
+
+  revalidatePath("/shop");
+  redirect(`/shop?trip=${trip.id}`);
+}
+
+export async function toggleShoppingItemAction(formData: FormData) {
+  const session = await requireSession();
+  const id = String(formData.get("id") || "");
+  const item = await prisma.shoppingItem.findFirst({
+    where: { id, trip: { householdId: session.householdId } },
+  });
+  if (!item) return;
+  await prisma.shoppingItem.update({
+    where: { id },
+    data: { checked: !item.checked },
+  });
+  revalidatePath("/shop");
+}
+
+export async function saveSkylightSettingsAction(formData: FormData) {
+  const session = await requireAdult();
+  if (session.member.role !== "ADMIN" && session.member.role !== "PARENT") {
+    return;
+  }
+  const email = String(formData.get("skylightEmail") || "").trim();
+  const password = String(formData.get("skylightPassword") || "").trim();
+  const frameId = String(formData.get("skylightFrameId") || "").trim();
+  const enabled = String(formData.get("skylightEnabled") || "") === "on";
+
+  await prisma.household.update({
+    where: { id: session.householdId },
+    data: {
+      skylightEmail: email || null,
+      skylightPassword: password || null,
+      skylightFrameId: frameId || null,
+      skylightEnabled: enabled,
+    },
+  });
+  revalidatePath("/settings");
+}
+
+export async function testSkylightAction() {
+  const session = await requireAdult();
+  const h = session.household;
+  if (!h.skylightEmail || !h.skylightPassword || !h.skylightFrameId) {
+    redirect("/settings?skylight=missing");
+  }
+  try {
+    await testSkylightConnection({
+      email: h.skylightEmail,
+      password: h.skylightPassword,
+      frameId: h.skylightFrameId,
+    });
+  } catch (err) {
+    // redirect() throws; must not treat that as a connection failure.
+    unstable_rethrow(err);
+    const msg = err instanceof Error ? err.message : "Connection failed";
+    redirect(`/settings?skylight=error&msg=${encodeURIComponent(msg.slice(0, 180))}`);
+  }
+  redirect("/settings?skylight=ok");
+}
+
+
+export async function syncWeekToSkylightAction(formData: FormData) {
+  const session = await requireAdult();
+  const h = session.household;
+  const weekStartRawForRedirect = String(formData.get("weekStart") || "");
+  const redirectBase = weekStartRawForRedirect
+    ? `/plan?week=${weekStartRawForRedirect}`
+    : "/plan";
+  if (!h.skylightEnabled || !h.skylightEmail || !h.skylightPassword || !h.skylightFrameId) {
+    redirect(
+      redirectBase.includes("?")
+        ? `${redirectBase}&skylight=disabled`
+        : `${redirectBase}?skylight=disabled`,
+    );
+  }
+  const weekStartRaw = String(formData.get("weekStart") || "");
+  const weekStart = weekStartRaw ? parseDateKey(weekStartRaw) : weekStartFrom();
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const dateMin = toDateKey(weekStart);
+  const dateMax = toDateKey(weekEnd);
+
+  const meals = await prisma.plannedMeal.findMany({
+    where: {
+      householdId: session.householdId,
+      date: { gte: weekStart, lte: weekEnd },
+    },
+    include: { recipe: { include: { ingredients: true } } },
+    orderBy: [{ date: "asc" }, { slot: "asc" }],
+  });
+
+  // Freeform plan rows often omit recipeId; fall back to a same-titled household recipe
+  // so directions/ingredients still sync to Skylight.
+  const householdRecipes = await prisma.recipe.findMany({
+    where: { householdId: session.householdId },
+    include: { ingredients: true },
+  });
+  const recipeByTitle = new Map(
+    householdRecipes.map((r) => [r.title.trim().toLowerCase(), r] as const),
+  );
+
+  const payload = meals.map((meal) => {
+    const linked =
+      meal.recipe || recipeByTitle.get(meal.title.trim().toLowerCase()) || null;
+    return {
+      date: toDateKey(meal.date),
+      slot: meal.slot.toLowerCase() as "breakfast" | "lunch" | "dinner" | "snack",
+      title: meal.title,
+      notes: meal.notes,
+      recipe: linked
+        ? {
+            title: linked.title,
+            instructions: linked.instructions,
+            ingredients: linked.ingredients.map((i) => ({
+              name: i.name,
+              quantity: i.quantity,
+              unit: i.unit,
+            })),
+          }
+        : undefined,
+    };
+  });
+
+  let result: Awaited<ReturnType<typeof syncMealsToSkylight>>;
+  try {
+    // Clear the whole week on Skylight first so removals/moves don't leave orphans.
+    result = await syncMealsToSkylight({
+      email: h.skylightEmail,
+      password: h.skylightPassword,
+      frameId: h.skylightFrameId,
+      dateMin,
+      dateMax,
+      meals: payload,
+    });
+  } catch (err) {
+    unstable_rethrow(err);
+    const q = new URLSearchParams();
+    if (weekStartRawForRedirect) q.set("week", weekStartRawForRedirect);
+    q.set("skylight", "error");
+    q.set(
+      "msg",
+      (err instanceof Error ? err.message : "Sync failed").slice(0, 180),
+    );
+    redirect(`/plan?${q.toString()}`);
+  }
+
+  const q = new URLSearchParams();
+  if (weekStartRawForRedirect) q.set("week", weekStartRawForRedirect);
+  if (result.ok) {
+    q.set("skylight", "ok");
+    q.set("synced", String(result.synced));
+  } else {
+    q.set("skylight", "partial");
+    q.set("synced", String(result.synced));
+    q.set("msg", (result.warnings[0] || "Sync completed with warnings").slice(0, 180));
+  }
+  redirect(`/plan?${q.toString()}`);
+}
