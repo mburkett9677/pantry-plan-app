@@ -94,7 +94,9 @@ export default async function PlanPage({
         <form action={syncWeekToSkylightAction} className="panel plan-sync">
           <div>
             <strong>Skylight sync</strong>
-            <p className="lede plan-sync-copy">Push this week’s meals to your Skylight Calendar.</p>
+            <p className="lede plan-sync-copy">
+              Replace this week’s meals on Skylight so removals and moves stick.
+            </p>
           </div>
           <input type="hidden" name="weekStart" value={toDateKey(weekStart)} />
           <button className="btn btn-primary btn-compact" type="submit">
