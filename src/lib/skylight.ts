@@ -354,4 +354,184 @@ async function listSittingsInRange(
         instances?: Array<{ date?: string } | string>;
       };
       relationships?: {
-        meal_cate
+        meal_category?: { data?: { id?: string } | null };
+      };
+    }>;
+  };
+
+  const out: SittingListItem[] = [];
+  for (const row of json.data || []) {
+    const mealCategoryId = row.relationships?.meal_category?.data?.id || null;
+    const attrDate = row.attributes?.date;
+    const instanceDates = (row.attributes?.instances || [])
+      .map((inst) => (typeof inst === "string" ? inst : inst.date))
+      .filter((d): d is string => Boolean(d));
+    const dates = instanceDates.length
+      ? instanceDates
+      : attrDate
+        ? [attrDate]
+        : [];
+    if (dates.length === 0) {
+      // List is already date-filtered; keep a placeholder so callers can retry per meal date.
+      out.push({ id: row.id, date: "", mealCategoryId });
+      continue;
+    }
+    for (const date of dates) {
+      if (date < dateMin || date > dateMax) continue;
+      out.push({ id: row.id, date, mealCategoryId });
+    }
+  }
+  return out;
+}
+
+async function deleteSittingInstance(
+  token: string,
+  frameId: string,
+  sittingId: string,
+  date: string,
+) {
+  return api(
+    token,
+    `/api/frames/${frameId}/meals/sittings/${sittingId}/instances/${date}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function syncMealsToSkylight(opts: {
+  email: string;
+  password: string;
+  frameId: string;
+  /** Inclusive YYYY-MM-DD window to clear before recreate (full week replace). */
+  dateMin?: string;
+  dateMax?: string;
+  meals: SkylightMealPayload[];
+}): Promise<{ ok: boolean; synced: number; deleted: number; warnings: string[] }> {
+  const warnings: string[] = [];
+  const tokens = await login(opts.email, opts.password);
+  let synced = 0;
+  let deleted = 0;
+  const categoryCache = new Map<string, string | null>();
+
+  // Full replace for the sync window. Skylight creates are append-only, and a
+  // date|slot-only clear misses deleted days (e.g. remove Thursday entirely).
+  const mealDates = opts.meals.map((m) => m.date).sort();
+  const dateMin = opts.dateMin || mealDates[0];
+  const dateMax = opts.dateMax || mealDates[mealDates.length - 1];
+
+  if (dateMin && dateMax) {
+    const existing = await listSittingsInRange(
+      tokens.accessToken,
+      opts.frameId,
+      dateMin,
+      dateMax,
+    );
+
+    for (const sitting of existing) {
+      if (!sitting.date) {
+        warnings.push(
+          `Could not clear Skylight sitting ${sitting.id}: missing instance date`,
+        );
+        continue;
+      }
+      const del = await deleteSittingInstance(
+        tokens.accessToken,
+        opts.frameId,
+        sitting.id,
+        sitting.date,
+      );
+      if (del.ok || del.status === 404) {
+        deleted += 1;
+      } else {
+        const text = await del.text();
+        warnings.push(
+          `Could not clear old Skylight meal ${sitting.date}: ${del.status} ${text.slice(0, 80)}`,
+        );
+      }
+    }
+  }
+
+  for (const meal of opts.meals) {
+    try {
+      if (!categoryCache.has(meal.slot)) {
+        categoryCache.set(
+          meal.slot,
+          await resolveMealCategoryId(tokens.accessToken, opts.frameId, meal.slot),
+        );
+      }
+      const mealCategoryId = categoryCache.get(meal.slot);
+      if (!mealCategoryId) {
+        warnings.push(`No Skylight meal category for ${meal.slot}`);
+        continue;
+      }
+
+      // One freeform sitting per meal: title in summary, ingredients+instructions in note.
+      // Skylight rejects description on sittings; skip recipe creates (recipe-box noise).
+      const title = meal.recipe?.title || meal.title;
+      const note = buildMealNote(meal);
+      if (!note) {
+        warnings.push(
+          `${meal.title} has no ingredients/instructions in PantryPlan — synced title only`,
+        );
+      }
+
+      const sittingRes = await api(
+        tokens.accessToken,
+        `/api/frames/${opts.frameId}/meals/sittings?include=meal_category`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            compactBody({
+              meal_category_id: mealCategoryId,
+              date: meal.date,
+              summary: title,
+              note: note || undefined,
+            }),
+          ),
+        },
+      );
+
+      if (!sittingRes.ok) {
+        const text = await sittingRes.text();
+        warnings.push(
+          `Meal sync failed for ${meal.date} ${meal.title}: ${sittingRes.status} ${text.slice(0, 120)}`,
+        );
+        continue;
+      }
+      synced += 1;
+    } catch (err) {
+      warnings.push(
+        `Meal sync error for ${meal.title}: ${err instanceof Error ? err.message : "unknown"}`,
+      );
+    }
+  }
+
+  return { ok: warnings.length === 0, synced, deleted, warnings };
+}
+
+export async function testSkylightConnection(opts: {
+  email: string;
+  password: string;
+  frameId: string;
+}) {
+  const tokens = await login(opts.email, opts.password);
+  const frameRes = await api(tokens.accessToken, `/api/frames/${opts.frameId}`);
+  if (frameRes.ok) return true;
+
+  // Frame id might be wrong — list frames so the error is actionable.
+  const listRes = await api(tokens.accessToken, `/api/frames`);
+  if (listRes.ok) {
+    const json = (await listRes.json()) as {
+      data?: Array<{ id: string; attributes?: { name?: string }; name?: string }>;
+    };
+    const ids = (json.data || [])
+      .map((f) => `${f.attributes?.name || f.name || "Frame"}=${f.id}`)
+      .slice(0, 8)
+      .join(", ");
+    throw new Error(
+      `Logged in, but frame ID "${opts.frameId}" was not found.${ids ? ` Available: ${ids}` : ""}`,
+    );
+  }
+
+  const text = await frameRes.text();
+  throw new Error(`Frame lookup failed (${frameRes.status}): ${text.slice(0, 200)}`);
+}
