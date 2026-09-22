@@ -93,4 +93,96 @@ async function followUntilHtml(jar: Map<string, string>, startUrl: string) {
       if (loc.startsWith("skylight-family:")) {
         return { res, html: "", location: loc, url };
       }
-      url = absoluteUrl(loc
+      url = absoluteUrl(loc);
+      continue;
+    }
+    const html = await res.text();
+    return { res, html, location: loc, url };
+  }
+  throw new Error("Skylight login: too many redirects before login form");
+}
+
+async function chaseAuthCode(jar: Map<string, string>, first: Response) {
+  let loc = first.headers.get("location");
+  let res = first;
+  for (let i = 0; i < 12; i++) {
+    if (loc?.startsWith("skylight-family:")) return loc;
+
+    if (
+      loc &&
+      (res.status === 301 ||
+        res.status === 302 ||
+        res.status === 303 ||
+        res.status === 307 ||
+        res.status === 308)
+    ) {
+      const next = absoluteUrl(loc);
+      if (isLoginPageUrl(next)) {
+        throw new Error("Skylight login failed: invalid email or password");
+      }
+      res = await request(jar, next, { method: "GET" });
+      loc = res.headers.get("location");
+      continue;
+    }
+
+    const body = await res.text();
+    if (/name="email"/i.test(body) && /name="password"/i.test(body)) {
+      throw new Error("Skylight login failed: invalid email or password");
+    }
+    throw new Error(
+      `Skylight login failed (HTTP ${res.status}). Check email/password. ${body.slice(0, 120)}`,
+    );
+  }
+  throw new Error("Skylight login: never received OAuth redirect with authorization code");
+}
+
+async function login(email: string, password: string): Promise<TokenBundle> {
+  const jar = new Map<string, string>();
+  const verifier = b64url(randomBytes(32));
+  const challenge = b64url(createHash("sha256").update(verifier).digest());
+  const state = b64url(randomBytes(18));
+
+  const authorizeUrl =
+    `${APP_BASE}/oauth/authorize?` +
+    new URLSearchParams({
+      response_type: "code",
+      client_id: OAUTH_CLIENT_ID,
+      redirect_uri: OAUTH_REDIRECT_URI,
+      scope: OAUTH_SCOPE,
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      prompt: "login",
+    }).toString();
+
+  const formPage = await followUntilHtml(jar, authorizeUrl);
+  const csrfMatch =
+    formPage.html.match(/name="authenticity_token"[^>]*value="([^"]+)"/) ||
+    formPage.html.match(/value="([^"]+)"[^>]*name="authenticity_token"/) ||
+    formPage.html.match(/name="csrf-token" content="([^"]+)"/) ||
+    formPage.html.match(/csrf-token" content="([^"]+)"/);
+  if (!csrfMatch?.[1]) {
+    throw new Error("Skylight login: could not load login form / CSRF token");
+  }
+
+  const body = new URLSearchParams({
+    authenticity_token: csrfMatch[1],
+    email,
+    password,
+  });
+
+  const sessionRes = await request(jar, `${APP_BASE}/auth/session`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "text/html,application/xhtml+xml",
+      Origin: APP_BASE,
+      Referer: `${APP_BASE}/auth/session/new`,
+    },
+    body,
+  });
+
+  // Wrong credentials usually bounce back to the login form (200 or 302).
+  if (sessionRes.status === 200) {
+    const html = await sessionRes.text();
+    if (/name="email"/i.test(html) || /invalid|incorrect|unable t
