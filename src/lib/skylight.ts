@@ -171,4 +171,187 @@ async function login(email: string, password: string): Promise<TokenBundle> {
     password,
   });
 
-  const sessionRes = awai
+  const sessionRes = await request(jar, `${APP_BASE}/auth/session`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "text/html,application/xhtml+xml",
+      Origin: APP_BASE,
+      Referer: `${APP_BASE}/auth/session/new`,
+    },
+    body,
+  });
+
+  // Wrong credentials usually bounce back to the login form (200 or 302).
+  if (sessionRes.status === 200) {
+    const html = await sessionRes.text();
+    if (/name="email"/i.test(html) || /invalid|incorrect|unable to sign/i.test(html)) {
+      throw new Error("Skylight login failed: invalid email or password");
+    }
+    throw new Error(
+      `Skylight login failed (HTTP 200): unexpected response ${html.slice(0, 120)}`,
+    );
+  }
+
+  const redirectLoc = await chaseAuthCode(jar, sessionRes);
+  const redirectUrl = new URL(redirectLoc.replace("skylight-family://", "https://skylight-family/"));
+  const code = redirectUrl.searchParams.get("code");
+  const returnedState = redirectUrl.searchParams.get("state");
+  if (!code) throw new Error("Skylight login: missing authorization code");
+  if (returnedState && returnedState !== state) {
+    throw new Error("Skylight login: OAuth state mismatch");
+  }
+
+  const tokenRes = await fetch(`${APP_BASE}/oauth/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "User-Agent": BROWSER_UA,
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: OAUTH_CLIENT_ID,
+      code,
+      redirect_uri: OAUTH_REDIRECT_URI,
+      code_verifier: verifier,
+    }),
+  });
+
+  if (!tokenRes.ok) {
+    const text = await tokenRes.text();
+    throw new Error(`Skylight token exchange failed (${tokenRes.status}): ${text.slice(0, 200)}`);
+  }
+
+  const tokenJson = (await tokenRes.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+  };
+  if (!tokenJson.access_token) {
+    throw new Error("Skylight token exchange returned no access_token");
+  }
+
+  return {
+    accessToken: tokenJson.access_token,
+    refreshToken: tokenJson.refresh_token,
+  };
+}
+
+async function api(token: string, path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${APP_BASE}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": BROWSER_UA,
+      ...(init?.headers || {}),
+    },
+  });
+}
+
+
+async function resolveMealCategoryId(
+  token: string,
+  frameId: string,
+  slot: SkylightMealPayload["slot"],
+): Promise<string | null> {
+  const res = await api(token, `/api/frames/${frameId}/meals/categories`);
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    data?: Array<{
+      id: string;
+      attributes?: { name?: string; label?: string; title?: string };
+      name?: string;
+      label?: string;
+      title?: string;
+    }>;
+  };
+  const wanted =
+    slot === "breakfast"
+      ? ["breakfast"]
+      : slot === "lunch"
+        ? ["lunch"]
+        : slot === "dinner"
+          ? ["dinner", "supper"]
+          : ["snack", "snacks"];
+  const match = (json.data || []).find((c) => {
+    const label =
+      `${c.attributes?.name || c.name || ""} ${c.attributes?.label || c.label || ""} ${c.attributes?.title || c.title || ""}`.toLowerCase();
+    return wanted.some((w) => label.includes(w));
+  });
+  return match?.id || json.data?.[0]?.id || null;
+}
+
+export type SkylightMealPayload = {
+  date: string; // YYYY-MM-DD
+  slot: "breakfast" | "lunch" | "dinner" | "snack";
+  title: string;
+  notes?: string | null;
+  recipe?: {
+    title: string;
+    ingredients?: Array<{ name: string; quantity?: string | null; unit?: string | null }>;
+    instructions?: string | null;
+  };
+};
+
+function compactBody<T extends Record<string, unknown>>(body: T) {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, v]) => v !== undefined && v !== null && v !== ""),
+  );
+}
+
+function formatIngredientLine(ing: {
+  name: string;
+  quantity?: string | null;
+  unit?: string | null;
+}) {
+  const qty = [ing.quantity, ing.unit].filter(Boolean).join(" ").trim();
+  return qty ? `${qty} ${ing.name}`.trim() : ing.name.trim();
+}
+
+/** Skylight's freeform meal field is one "Instructions or ingredients" box (`note`). */
+function buildMealNote(meal: SkylightMealPayload) {
+  const ingredientLines = (meal.recipe?.ingredients || [])
+    .map(formatIngredientLine)
+    .filter(Boolean);
+  const instructions = (meal.recipe?.instructions || meal.notes || "").trim();
+
+  const parts: string[] = [];
+  if (ingredientLines.length) {
+    parts.push(`Ingredients:\n${ingredientLines.map((line) => `• ${line}`).join("\n")}`);
+  }
+  if (instructions) {
+    parts.push(`Instructions:\n${instructions}`);
+  }
+  return parts.join("\n\n").trim();
+}
+
+type SittingListItem = {
+  id: string;
+  date: string;
+  mealCategoryId: string | null;
+};
+
+async function listSittingsInRange(
+  token: string,
+  frameId: string,
+  dateMin: string,
+  dateMax: string,
+): Promise<SittingListItem[]> {
+  const qs = new URLSearchParams({
+    date_min: dateMin,
+    date_max: dateMax,
+    include: "meal_category",
+  });
+  const res = await api(token, `/api/frames/${frameId}/meals/sittings?${qs}`);
+  if (!res.ok) return [];
+  const json = (await res.json()) as {
+    data?: Array<{
+      id: string;
+      attributes?: {
+        date?: string;
+        instances?: Array<{ date?: string } | string>;
+      };
+      relationships?: {
+        meal_cate
