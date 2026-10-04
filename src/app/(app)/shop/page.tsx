@@ -1,7 +1,9 @@
-import { format } from "date-fns";
+import Link from "next/link";
+import { addDays, format } from "date-fns";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { toDateKey, weekStartFrom } from "@/lib/dates";
+import { nearbyWeeks, toDateKey, weekRangeLabel, weekStartFrom } from "@/lib/dates";
+import { groupShoppingByCategory } from "@/lib/shopping";
 import {
   generateShoppingListAction,
   toggleShoppingItemAction,
@@ -10,11 +12,21 @@ import {
 export default async function ShopPage({
   searchParams,
 }: {
-  searchParams: Promise<{ trip?: string }>;
+  searchParams: Promise<{ trip?: string; week?: string }>;
 }) {
   const session = await requireSession();
   const params = await searchParams;
-  const weekStart = weekStartFrom();
+  const weekStart = params.week ? weekStartFrom(new Date(params.week)) : weekStartFrom();
+  const weekKey = toDateKey(weekStart);
+  const weeks = nearbyWeeks(new Date(), { before: 2, after: 6 });
+  if (!weeks.some((w) => toDateKey(w) === weekKey)) {
+    weeks.push(weekStart);
+    weeks.sort((a, b) => a.getTime() - b.getTime());
+  }
+  const prev = new Date(weekStart);
+  prev.setDate(prev.getDate() - 7);
+  const next = new Date(weekStart);
+  next.setDate(next.getDate() + 7);
 
   const [stores, trips] = await Promise.all([
     prisma.store.findMany({
@@ -25,56 +37,68 @@ export default async function ShopPage({
       where: { householdId: session.householdId },
       include: { store: true, items: true },
       orderBy: { createdAt: "desc" },
-      take: 5,
+      take: 8,
     }),
   ]);
 
-  const trip =
-    (params.trip
-      ? trips.find((t) => t.id === params.trip) ||
-        (await prisma.shoppingTrip.findFirst({
-          where: { id: params.trip, householdId: session.householdId },
-          include: { store: true, items: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
-        }))
-      : trips[0]
-        ? await prisma.shoppingTrip.findFirst({
-            where: { id: trips[0].id },
-            include: { store: true, items: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
-          })
-        : null);
+  const tripForWeek = trips.find((t) => toDateKey(t.weekStart) === weekKey);
+  const selectedTripId = params.trip || tripForWeek?.id || trips[0]?.id || null;
 
-  const grouped = new Map<string, NonNullable<typeof trip>["items"]>();
-  if (trip) {
-    for (const item of trip.items) {
-      const key =
-        item.aisleNumber != null
-          ? `Aisle ${item.aisleNumber}${item.aisleName ? ` · ${item.aisleName}` : ""}`
-          : "Uncategorized";
-      const list = grouped.get(key) || [];
-      list.push(item);
-      grouped.set(key, list);
-    }
-  }
+  const trip = selectedTripId
+    ? await prisma.shoppingTrip.findFirst({
+        where: { id: selectedTripId, householdId: session.householdId },
+        include: {
+          store: true,
+          items: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+        },
+      })
+    : null;
+
+  const grouped = trip ? groupShoppingByCategory(trip.items) : [];
 
   return (
     <div className="stack">
-      <div>
-        <p className="eyebrow">Groceries</p>
-        <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.8rem" }}>
-          Shopping list
-        </h1>
-        <p className="lede">
-          Built from this week’s planned recipes, sorted by your store’s aisle map.
-        </p>
+      <div className="plan-header">
+        <div>
+          <p className="eyebrow">Groceries</p>
+          <h1 className="plan-title">Shopping list</h1>
+          <p className="lede" style={{ margin: "0.25rem 0 0" }}>
+            Pick the week you’re shopping for, then generate a list grouped by store section.
+          </p>
+        </div>
+        <div className="row plan-week-nav">
+          <Link className="btn btn-secondary btn-compact" href={`/shop?week=${toDateKey(prev)}`}>
+            ←
+          </Link>
+          <Link className="btn btn-secondary btn-compact" href={`/shop?week=${toDateKey(next)}`}>
+            →
+          </Link>
+        </div>
       </div>
 
       {session.member.role !== "KID" && (
         <form action={generateShoppingListAction} className="panel stack">
-          <input type="hidden" name="weekStart" value={toDateKey(weekStart)} />
+          <div className="field">
+            <label htmlFor="weekStart">Week</label>
+            <select id="weekStart" name="weekStart" defaultValue={weekKey}>
+              {weeks.map((week) => {
+                const key = toDateKey(week);
+                const current = key === toDateKey(weekStartFrom());
+                const nextWeek = key === toDateKey(addDays(weekStartFrom(), 7));
+                const suffix = current ? " (this week)" : nextWeek ? " (next week)" : "";
+                return (
+                  <option key={key} value={key}>
+                    Week of {format(week, "MMM d")}
+                    {suffix}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
           <div className="field">
             <label htmlFor="storeId">Store</label>
             <select id="storeId" name="storeId" defaultValue={stores[0]?.id || ""}>
-              <option value="">No aisle sorting</option>
+              <option value="">Categories only</option>
               {stores.map((store) => (
                 <option key={store.id} value={store.id}>
                   {store.name}
@@ -83,15 +107,31 @@ export default async function ShopPage({
             </select>
           </div>
           <button className="btn btn-primary" type="submit">
-            Generate from this week
+            Generate list for {weekRangeLabel(weekStart)}
           </button>
         </form>
       )}
 
+      {trips.length > 1 ? (
+        <div className="row" style={{ flexWrap: "wrap" }}>
+          {trips.map((t) => (
+            <Link
+              key={t.id}
+              className={`chip ${trip?.id === t.id ? "" : ""}`}
+              href={`/shop?week=${toDateKey(t.weekStart)}&trip=${t.id}`}
+              style={trip?.id === t.id ? { background: "var(--accent)", color: "white" } : undefined}
+            >
+              {format(t.weekStart, "MMM d")}
+              {t.store ? ` · ${t.store.name}` : ""}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
       {!trip ? (
         <div className="panel">
           <p className="lede" style={{ margin: 0 }}>
-            No shopping trip yet. Add recipes to the week plan, map a store’s aisles, then generate.
+            No shopping trip yet for this week. Add recipes to the plan, then generate a list.
           </p>
         </div>
       ) : (
@@ -102,15 +142,20 @@ export default async function ShopPage({
               {trip.store ? ` · ${trip.store.name}` : ""}
             </strong>
             <div className="lede" style={{ margin: 0, fontSize: "0.9rem" }}>
-              {trip.items.filter((i) => i.checked).length}/{trip.items.length} checked
+              {trip.items.filter((i) => i.checked).length}/{trip.items.length} checked · grouped by
+              category
             </div>
           </div>
 
-          {[...grouped.entries()].map(([aisle, items]) => (
-            <section key={aisle} className="panel aisle-group">
-              <h3>{aisle}</h3>
-              {items.map((item) => (
-                <form key={item.id} action={toggleShoppingItemAction} className={`shop-item ${item.checked ? "checked" : ""}`}>
+          {grouped.map((group) => (
+            <section key={group.key} className="panel aisle-group">
+              <h3>{group.label}</h3>
+              {group.items.map((item) => (
+                <form
+                  key={item.id}
+                  action={toggleShoppingItemAction}
+                  className={`shop-item ${item.checked ? "checked" : ""}`}
+                >
                   <input type="hidden" name="id" value={item.id} />
                   <button
                     type="submit"
@@ -129,7 +174,9 @@ export default async function ShopPage({
                       {[item.quantity, item.unit].filter(Boolean).join(" ")} {item.name}
                     </strong>
                     <div className="lede" style={{ margin: 0, fontSize: "0.8rem" }}>
-                      {item.category}
+                      {item.aisleNumber != null
+                        ? `Aisle ${item.aisleNumber}${item.aisleName ? ` · ${item.aisleName}` : ""}`
+                        : group.label}
                       {item.sources?.length ? ` · ${item.sources.join(", ")}` : ""}
                     </div>
                   </div>

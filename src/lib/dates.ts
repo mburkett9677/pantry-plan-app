@@ -27,6 +27,24 @@ export function slotLabel(slot: string) {
   return slot.charAt(0) + slot.slice(1).toLowerCase();
 }
 
+export function weekRangeLabel(weekStart: Date) {
+  const end = addDays(weekStart, 6);
+  return `${format(weekStart, "MMM d")} – ${format(end, "MMM d")}`;
+}
+
+/** Nearby Monday-start weeks for shopping/plan pickers (includes next week). */
+export function nearbyWeeks(
+  from = new Date(),
+  opts: { before?: number; after?: number } = {},
+) {
+  const before = opts.before ?? 2;
+  const after = opts.after ?? 6;
+  const origin = weekStartFrom(from);
+  return Array.from({ length: before + after + 1 }, (_, i) =>
+    addDays(origin, (i - before) * 7),
+  );
+}
+
 export const MEMBER_COLORS = [
   "#2a6f5e",
   "#c45c26",

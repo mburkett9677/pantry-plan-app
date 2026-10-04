@@ -13,7 +13,7 @@ import {
   verifyPin,
 } from "@/lib/auth";
 import { parseRecipeText } from "@/lib/parse-recipe";
-import { aggregateIngredients, matchAisle, sortShoppingByAisle } from "@/lib/shopping";
+import { aggregateIngredients, groceryCategoryOrder, matchAisle, sortShoppingByCategory } from "@/lib/shopping";
 import { parseDateKey, toDateKey, weekStartFrom } from "@/lib/dates";
 import { syncMealsToSkylight, testSkylightConnection } from "@/lib/skylight";
 import type { MealSlot, MemberRole } from "@prisma/client";
@@ -217,8 +217,11 @@ export async function upsertPlannedMealAction(formData: FormData) {
 export async function deletePlannedMealAction(formData: FormData) {
   const session = await requireSession();
   const id = String(formData.get("id") || "");
+  const next = String(formData.get("next") || "");
   await prisma.plannedMeal.deleteMany({ where: { id, householdId: session.householdId } });
   revalidatePath("/plan");
+  revalidatePath("/shop");
+  if (next.startsWith("/")) redirect(next);
 }
 
 export async function createLunchRequestAction(formData: FormData) {
@@ -319,17 +322,25 @@ export async function generateShoppingListAction(formData: FormData) {
     where: {
       householdId: session.householdId,
       date: { gte: weekStart, lte: weekEnd },
-      recipeId: { not: null },
     },
     include: { recipe: { include: { ingredients: true } } },
   });
 
-  const ingredients = meals.flatMap((meal) =>
-    (meal.recipe?.ingredients || []).map((ing) => ({
-      ...ing,
-      recipeTitle: meal.recipe?.title || meal.title,
-    })),
+  const householdRecipes = await prisma.recipe.findMany({
+    where: { householdId: session.householdId },
+    include: { ingredients: true },
+  });
+  const recipeByTitle = new Map(
+    householdRecipes.map((r) => [r.title.trim().toLowerCase(), r] as const),
   );
+
+  const ingredients = meals.flatMap((meal) => {
+    const linked = meal.recipe || recipeByTitle.get(meal.title.trim().toLowerCase()) || null;
+    return (linked?.ingredients || []).map((ing) => ({
+      ...ing,
+      recipeTitle: linked?.title || meal.title,
+    }));
+  });
 
   // Also include freeform meal titles without recipes as reminder lines? skip for now.
   const aggregated = aggregateIngredients(ingredients);
@@ -343,7 +354,7 @@ export async function generateShoppingListAction(formData: FormData) {
       storeId,
       weekStart,
       items: {
-        create: sortShoppingByAisle(
+        create: sortShoppingByCategory(
           aggregated.map((item) => {
             const aisle = matchAisle(item.category, aisles);
             return {
@@ -354,16 +365,19 @@ export async function generateShoppingListAction(formData: FormData) {
               aisleNumber: aisle?.number ?? null,
               aisleName: aisle?.name ?? null,
               sources: item.sources,
-              sortOrder: aisle?.number ?? 9999,
+              sortOrder: groceryCategoryOrder(item.category) * 100,
             };
           }),
-        ),
+        ).map((item, index) => ({
+          ...item,
+          sortOrder: item.sortOrder + index,
+        })),
       },
     },
   });
 
   revalidatePath("/shop");
-  redirect(`/shop?trip=${trip.id}`);
+  redirect(`/shop?week=${toDateKey(weekStart)}&trip=${trip.id}`);
 }
 
 export async function toggleShoppingItemAction(formData: FormData) {

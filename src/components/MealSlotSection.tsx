@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { AddMealForm } from "@/components/AddMealForm";
 
@@ -66,13 +67,14 @@ export function MealSlotSection({
 
       {meals.map((meal) => (
         <div key={meal.id} className="meal-row">
-          <div className="meal-row-text">
+          <Link href={`/plan/meals/${meal.id}`} className="meal-row-text meal-link">
             <div className="meal-title">{meal.recipeTitle || meal.title}</div>
-            {meal.hasRecipe ? <div className="meal-meta">Recipe linked</div> : null}
+            {meal.hasRecipe ? <div className="meal-meta">Tap for ingredients &amp; directions</div> : null}
+            {!meal.hasRecipe ? <div className="meal-meta">Tap to open</div> : null}
             {meal.requestedByName ? (
               <div className="meal-meta">via {meal.requestedByName}</div>
             ) : null}
-          </div>
+          </Link>
           {canEdit ? (
             <form action={deleteAction}>
               <input type="hidden" name="id" value={meal.id} />

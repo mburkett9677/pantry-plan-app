@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
+import { guessGroceryCategory } from "@/lib/shopping";
 
 const ingredientSchema = z.object({
   name: z.string(),
@@ -19,7 +20,7 @@ const parsedRecipeSchema = z.object({
 export type ParsedRecipe = z.infer<typeof parsedRecipeSchema>;
 
 const CATEGORY_HINT =
-  "Use grocery categories like produce, dairy, meat, seafood, bakery, frozen, pantry, spices, beverages, snacks, household, other.";
+  "Use grocery categories like produce, meat, seafood, dairy, bakery, frozen, international, pasta/sauce, canned, baking, spices, beverages, snacks, household, pantry, other.";
 
 function heuristicParse(text: string): ParsedRecipe {
   const lines = text
@@ -61,19 +62,8 @@ function heuristicParse(text: string): ParsedRecipe {
   };
 }
 
-function guessCategory(name: string): string {
-  const n = name.toLowerCase();
-  if (/(milk|cheese|yogurt|butter|cream|egg)/.test(n)) return "dairy";
-  if (/(chicken|beef|pork|turkey|bacon|sausage)/.test(n)) return "meat";
-  if (/(salmon|shrimp|tuna|fish|cod)/.test(n)) return "seafood";
-  if (/(lettuce|tomato|onion|garlic|apple|banana|berry|spinach|carrot|potato|pepper|avocado|lemon|lime|cilantro|basil)/.test(n))
-    return "produce";
-  if (/(bread|tortilla|bagel|bun)/.test(n)) return "bakery";
-  if (/(frozen|ice cream)/.test(n)) return "frozen";
-  if (/(salt|pepper|cumin|paprika|oregano|cinnamon|spice)/.test(n)) return "spices";
-  if (/(oil|flour|sugar|rice|pasta|bean|broth|sauce|vinegar|soy)/.test(n)) return "pantry";
-  if (/(juice|soda|water|coffee|tea)/.test(n)) return "beverages";
-  return "other";
+function guessCategory(name: string, stored?: string | null): string {
+  return guessGroceryCategory(name, stored);
 }
 
 export async function parseRecipeText(text: string): Promise<ParsedRecipe> {
@@ -107,7 +97,7 @@ export async function parseRecipeText(text: string): Promise<ParsedRecipe> {
       ...parsed,
       ingredients: parsed.ingredients.map((ing) => ({
         ...ing,
-        category: ing.category || guessCategory(ing.name),
+        category: guessCategory(ing.name, ing.category),
       })),
     };
   } catch {

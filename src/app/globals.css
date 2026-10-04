@@ -273,9 +273,16 @@ textarea {
   gap: 0.5rem;
 }
 
-.meal-row-text {
-  min-width: 0;
-  flex: 1;
+.meal-link {
+  color: inherit;
+  border-radius: 10px;
+}
+
+.meal-link:hover .meal-title,
+.meal-link:focus-visible .meal-title {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .meal-title {
