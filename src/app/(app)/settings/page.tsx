@@ -36,6 +36,12 @@ export default async function SettingsPage({
       {sp.skylight === "ok" && (
         <StatusBanner tone="ok">Skylight connection succeeded.</StatusBanner>
       )}
+      {sp.skylight === "saved" && (
+        <StatusBanner tone="ok">
+          Skylight settings saved. Test the connection, then use Sync on the week
+          plan. Leave the password blank next time to keep the saved one.
+        </StatusBanner>
+      )}
       {sp.skylight === "missing" && (
         <StatusBanner tone="error">
           Save Skylight email, password, and frame ID before testing.
@@ -147,8 +153,25 @@ export default async function SettingsPage({
                 id="skylightPassword"
                 name="skylightPassword"
                 type="password"
-                defaultValue={session.household.skylightPassword || ""}
+                autoComplete="new-password"
+                placeholder={
+                  session.household.skylightPassword
+                    ? "Leave blank to keep the saved password"
+                    : "Skylight password"
+                }
               />
+              {session.household.skylightPassword ? (
+                <p className="lede" style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>
+                  A password is already saved. Leave this blank unless you need to
+                  replace it, then check Enable Skylight sync and save.
+                </p>
+              ) : (
+                <p className="lede" style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>
+                  Enter the Skylight password, check Enable Skylight sync, and save.
+                  Browsers often hide this field, so type it even if you think it is
+                  already filled.
+                </p>
+              )}
             </div>
             <div className="field">
               <label htmlFor="skylightFrameId">Frame / household ID</label>
